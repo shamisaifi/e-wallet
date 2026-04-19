@@ -12,7 +12,8 @@ app.use("/api/v1/transactions", transactionsRoutes);
 
 app.use(errorHandler);
 
-app.listen(8080, () => {
-  console.log("server connected to port 8080");
+const PORT = 8080
+app.listen(PORT, () => {
+  console.log(`server connected to port ${PORT}`);
 });
 

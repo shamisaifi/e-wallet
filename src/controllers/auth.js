@@ -114,7 +114,7 @@ const refesh = async (req, res, next) => {
     return next(new ApiError(404, "refresh token not found"));
   }
 
-  decoded = jwt.verify(refreshToken, process.env.REFRESH_TOKEN_SECRET);
+  const decoded = jwt.verify(refreshToken, process.env.REFRESH_TOKEN_SECRET);
 
   const newRefreshToken = jwt.sign(
     decoded.userId,
