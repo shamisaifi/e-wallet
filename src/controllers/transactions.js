@@ -1,30 +1,33 @@
 import { pool } from "../config/db.js";
 import ApiError from "../utils/ApiError.js";
 
-const checkBalance = async(req, res, next) => {
-    const userId = req.user.userId
+const checkBalance = async (req, res, next) => {
+  const userId = req.user.userId;
 
-    if(!userId){
-      return next (new ApiError(404, 'user id undefined'))
+  if (!userId) {
+    return next(new ApiError(404, "user id undefined"));
+  }
+
+  try {
+    const wallet_data = await pool.query(
+      "select * from wallets where user_id = $1",
+      [userId],
+    );
+
+    if (wallet_data.rows[0].length <= 0) {
+      return next(new ApiError(404, "no record found"));
     }
+    console.log("user data: ", wallet_data.rows[0]);
 
-    try {
-      const wallet_data = await pool.query('select * from wallets where user_id = $1', [userId])
-      
-      if(wallet_data.rows[0].length <= 0){
-        return next (new ApiError(404, 'no record found'))
-      }
-      console.log('user data: ', wallet_data.rows[0])
-
-      return res.status(200).json({
-        success: true,
-        message: 'wallet balance',
-        data: wallet_data.rows[0]
-      })
-    } catch (error) {
-      next(error)
-    }
-}
+    return res.status(200).json({
+      success: true,
+      message: "wallet balance",
+      data: wallet_data.rows[0],
+    });
+  } catch (error) {
+    next(error);
+  }
+};
 
 // transfer money
 const tranferMoney = async (req, res, next) => {
@@ -236,33 +239,44 @@ const withdraw = async (req, res, next) => {
   }
 };
 
-const transactionHistory = async(req, res, next) => {
-    const {userId} = req.user
-    const {limit, page} = req.query
-    const skip = (page -1)*limit
-    console.log(userId, limit, page, skip)
+const transactionHistory = async (req, res, next) => {
+  const { userId } = req.user;
+  const {
+    limit = 10,
+    page = 0,
+    type = "all",
+    status = "all",
+    start_range,
+    end_range,
+  } = req.query;
 
-    if(!userId){
-      return next (new ApiError(403, 'user id undefined'))
+  const skip = page > 0 ? ((page - 1) * limit) : 0;
+  console.log(userId, limit, page, skip);
+
+  if (!userId) {
+    return next(new ApiError(403, "user id undefined"));
+  }
+
+  try {
+    const history = await pool.query(
+      `select * from transactions where sender_id = $1 or receiver_id = $2 order by created_at desc offset $3 limit $4`,
+      [userId, userId, skip, limit],
+    );
+
+    if (!history) {
+      return next(new ApiError(500, "something went wrong!"));
     }
 
-    try {
-      // const history = await pool.query(`select * from transactions where sender_id = $1 or receiver_id = $2 group by type order by created_at desc offset $3 limit $4`,[userId, userId, skip, limit])
+    console.log("history: ", history);
 
-      const history = await pool.query(`select * from (select * from tranctions where senderId = $1 group by type) t1 join transactions t2 on t1.sender_id = t2.sender_id`)
+    return res.json({
+      success: true,
+      message: 'transaction history',
+      data: history
+    })
+  } catch (error) {
+    next(error);
+  }
+};
 
-
-      if(!history){
-        return next (new ApiError(500, 'something went wrong!'))
-      }
-
-      console.log('history: ', history)
-      
-    } catch (error) {
-     next(error) 
-    }
-
-    
-}
-
-export {checkBalance, tranferMoney, deposit, withdraw, transactionHistory };
+export { checkBalance, tranferMoney, deposit, withdraw, transactionHistory };
