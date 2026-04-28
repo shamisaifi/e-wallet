@@ -46,6 +46,15 @@ const tranferMoney = async (req, res, next) => {
   const client = await pool.connect();
 
   try {
+    const isReceiver = await pool.query(
+      "select user_id from users where user_id = $1",
+      [receiverId],
+    );
+
+    if (!isReceiver) {
+      return next(new ApiError(404, "receiver not exist"));
+    }
+
     const existing = await pool.query(
       "select * from idempotency_keys where key = $1",
       [idempotencyKey],
@@ -239,6 +248,7 @@ const withdraw = async (req, res, next) => {
   }
 };
 
+// history
 const transactionHistory = async (req, res, next) => {
   const { userId } = req.user;
   const {
@@ -250,7 +260,7 @@ const transactionHistory = async (req, res, next) => {
     end_range,
   } = req.query;
 
-  const skip = page > 0 ? ((page - 1) * limit) : 0;
+  const skip = page > 0 ? (page - 1) * limit : 0;
   console.log(userId, limit, page, skip);
 
   if (!userId) {
@@ -271,9 +281,9 @@ const transactionHistory = async (req, res, next) => {
 
     return res.json({
       success: true,
-      message: 'transaction history',
-      data: history
-    })
+      message: "transaction history",
+      data: history,
+    });
   } catch (error) {
     next(error);
   }
