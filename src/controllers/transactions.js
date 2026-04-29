@@ -14,7 +14,7 @@ const checkBalance = async (req, res, next) => {
       [userId],
     );
 
-    if (wallet_data.rows[0].length <= 0) {
+    if (wallet_data.rows.length <= 0) {
       return next(new ApiError(404, "no record found"));
     }
     console.log("user data: ", wallet_data.rows[0]);
@@ -51,7 +51,7 @@ const tranferMoney = async (req, res, next) => {
       [receiverId],
     );
 
-    if (!isReceiver) {
+    if (isReceiver.rowCount === 0) {
       return next(new ApiError(404, "receiver not exist"));
     }
 
@@ -129,7 +129,7 @@ const tranferMoney = async (req, res, next) => {
       [senderId, receiverId, amount, "deposit", "failed"],
     );
 
-    await pool.query("rollback");
+    await client.query("rollback");
 
     next(error);
   } finally {
@@ -147,7 +147,7 @@ const deposit = async (req, res, next) => {
   }
 
   if (amount <= 0) {
-    return next(new ApiError(400, "amount must be greater than 0")());
+    return next(new ApiError(400, "amount must be greater than 0"));
   }
 
   const client = await pool.connect();
@@ -195,7 +195,7 @@ const withdraw = async (req, res, next) => {
   }
 
   if (amount <= 0) {
-    return next(new ApiError(400, "amount must be greater than 0")());
+    return next(new ApiError(400, "amount must be greater than 0"));
   }
 
   try {
@@ -241,8 +241,8 @@ const withdraw = async (req, res, next) => {
     );
 
     await client.query("rollback");
-
     next(error);
+    return;
   } finally {
     client.release();
   }
@@ -282,7 +282,11 @@ const transactionHistory = async (req, res, next) => {
     return res.json({
       success: true,
       message: "transaction history",
-      data: history,
+      limit,
+      skip,
+      totalPages: history.rowCount,
+      currentPage: page,
+      data: history.rows,
     });
   } catch (error) {
     next(error);
