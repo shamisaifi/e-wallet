@@ -116,8 +116,6 @@ const refesh = async (req, res, next) => {
   jwt.verify(refreshToken, process.env.REFRESH_TOKEN_SECRET, (err, user) => {
     if (err) return res.status(403).json({ error: "Invalid token" });
 
-    console.log(user);
-
     const newAccessToken = generateAccessToken({ userId: user.userId });
     res.json({
       success: true,
