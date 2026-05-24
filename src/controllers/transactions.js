@@ -1,296 +1,358 @@
 import { pool } from "../config/db.js";
+import { getCache, setCache } from "../middleware/cache.js";
 import ApiError from "../utils/ApiError.js";
+import { aquireLock, releaseLock } from "../utils/lock.js";
 
 const checkBalance = async (req, res, next) => {
-  const userId = req.user.userId;
+    const userId = req.user.userId;
 
-  if (!userId) {
-    return next(new ApiError(404, "user id undefined"));
-  }
-
-  try {
-    const wallet_data = await pool.query(
-      "select * from wallets where user_id = $1",
-      [userId],
-    );
-
-    if (wallet_data.rows.length <= 0) {
-      return next(new ApiError(404, "no record found"));
+    if (!userId) {
+        return next(new ApiError(404, "user id undefined"));
     }
-    console.log("user data: ", wallet_data.rows[0]);
 
-    return res.status(200).json({
-      success: true,
-      message: "wallet balance",
-      data: wallet_data.rows[0],
-    });
-  } catch (error) {
-    next(error);
-  }
+    const cacheKey = `balance:${userId}`;
+
+    try {
+        const cacheData = await getCache(cacheKey, next);
+
+        if (cacheData) {
+            return res.status(200).json({
+                success: true,
+                message: "wallet balance cache",
+                data: cacheData,
+            });
+        }
+
+        const wallet_data = await pool.query(
+            "select * from wallets where user_id = $1",
+            [userId],
+        );
+
+        if (wallet_data.rows.length <= 0) {
+            return next(new ApiError(404, "no record found"));
+        }
+        const data = wallet_data.rows[0];
+
+        await setCache(cacheKey, data, next);
+        return res.status(200).json({
+            success: true,
+            message: "wallet balance",
+            data,
+        });
+    } catch (error) {
+        next(error);
+    }
 };
 
 // transfer money
 const tranferMoney = async (req, res, next) => {
-  const idempotencyKey = req.headers["idempotency-key"];
+    const idempotencyKey = req.headers["idempotency-key"];
+    const lockKey = `lock:wallet:${senderId}`;
 
-  const { amount } = req.body;
-  const { receiverId } = req.params;
-  const senderId = req.user.userId;
+    const { amount } = req.body;
+    const { receiverId } = req.params;
+    const senderId = req.user.userId;
 
-  if (!idempotencyKey) {
-    return res.status(400).json({
-      error: "Idempotency-Key header required",
-    });
-  }
-
-  const client = await pool.connect();
-
-  try {
-    const isReceiver = await pool.query(
-      "select user_id from users where user_id = $1",
-      [receiverId],
-    );
-
-    if (isReceiver.rowCount === 0) {
-      return next(new ApiError(404, "receiver not exist"));
+    if (!idempotencyKey) {
+        return res.status(400).json({
+            error: "Idempotency-Key header required",
+        });
     }
 
-    const existing = await pool.query(
-      "select * from idempotency_keys where key = $1",
-      [idempotencyKey],
-    );
+    const client = await pool.connect();
 
-    if (existing.rows.length > 0) {
-      return res.status(200).json({
-        success: true,
-        data: existing.rows[0].response,
-      });
+    try {
+        const isReceiver = await pool.query(
+            "select user_id from users where user_id = $1",
+            [receiverId],
+        );
+
+        if (isReceiver.rowCount === 0) {
+            return next(new ApiError(404, "receiver not exist"));
+        }
+
+        const existing = await pool.query(
+            "select * from idempotency_keys where key = $1",
+            [idempotencyKey],
+        );
+
+        if (existing.rows.length > 0) {
+            return res.status(200).json({
+                success: true,
+                data: existing.rows[0].response,
+            });
+        }
+
+        const lock = await aquireLock(lockKey, 10);
+        if (!lock) {
+            return next(
+                new ApiError(
+                    409,
+                    "transfer already in progress for this account",
+                ),
+            );
+        }
+
+        await client.query("begin");
+
+        const walletResult = await client.query(
+            "select balance from wallets where user_id = $1 for update",
+            [senderId],
+        );
+
+        if (walletResult.rows[0].balance < amount) {
+            throw new Error("Insufficient balance");
+        }
+
+        await client.query(
+            "update wallets set balance = balance - $1 where user_id = $2 returning balance",
+            [amount, senderId],
+        );
+
+        await client.query(
+            "update wallets set balance = balance + $1 where user_id = $2 returning balance",
+            [amount, receiverId],
+        );
+        await client.query(
+            "insert into transactions (sender_id, receiver_id, amount, type, status) values ($1, $2, $3, $4, $5)",
+            [senderId, receiverId, amount, "transfer", "completed"],
+        );
+
+        const idempotencyResult = await client.query(
+            "insert into idempotency_keys (key, response) values($1, $2) on conflict (key) do nothing",
+            [
+                idempotencyKey,
+                JSON.stringify({
+                    success: true,
+                    message: "money transferred successfully",
+                }),
+            ],
+        );
+
+        if (idempotencyResult.rowCount === 0) {
+            const stored = await pool.query(
+                "SELECT response FROM idempotency_keys WHERE key = $1",
+                [idempotencyKey],
+            );
+            await client.query("ROLLBACK");
+            return res.status(200).json({
+                success: true,
+                message: "money transferred successfully",
+                data: stored.rows[0].response,
+            });
+        }
+
+        await client.query("commit");
+
+        const senderBalance = await pool.query(
+            "select balance from wallets where user_id = $1",
+            [senderId],
+        );
+
+        const receiverBalance = await pool.query(
+            "select balance from wallets where user_id = $1",
+            [receiverId],
+        );
+
+        const senderKey = `balance:${senderId}`;
+        const receiverKey = `balance:${receiverId}`;
+        await setCache(senderKey, senderBalance.rows[0], next);
+        await setCache(receiverKey, receiverBalance.rows[0], next);
+
+        return res
+            .status(200)
+            .json({ success: true, message: "money transferred successfuly" });
+    } catch (error) {
+        console.log(error);
+
+        await client.query(
+            "insert into transactions (sender_id, receiver_id, amount, type, status) values ($1, $2, $3, $4, $5)",
+            [senderId, receiverId, amount, "deposit", "failed"],
+        );
+
+        await client.query("rollback");
+
+        next(error);
+    } finally {
+        await releaseLock(lockKey);
+        client.release();
     }
-
-    await client.query("begin");
-
-    const walletResult = await client.query(
-      "select balance from wallets where user_id = $1 for update",
-      [senderId],
-    );
-
-    if (walletResult.rows[0].balance < amount) {
-      throw new Error("Insufficient balance");
-    }
-
-    await client.query(
-      "update wallets set balance = balance - $1 where user_id = $2 returning balance",
-      [amount, senderId],
-    );
-
-    await client.query(
-      "update wallets set balance = balance + $1 where user_id = $2 returning balance",
-      [amount, receiverId],
-    );
-    await client.query(
-      "insert into transactions (sender_id, receiver_id, amount, type, status) values ($1, $2, $3, $4, $5)",
-      [senderId, receiverId, amount, "transfer", "completed"],
-    );
-
-    const idempotencyResult = await client.query(
-      "insert into idempotency_keys (key, response) values($1, $2) on conflict (key) do nothing",
-      [
-        idempotencyKey,
-        JSON.stringify({
-          success: true,
-          message: "money transferred successfully",
-        }),
-      ],
-    );
-
-    if (idempotencyResult.rowCount === 0) {
-      const stored = await pool.query(
-        "SELECT response FROM idempotency_keys WHERE key = $1",
-        [idempotencyKey],
-      );
-      await client.query("ROLLBACK");
-      return res.status(200).json({
-        success: true,
-        message: "money transferred successfully",
-        data: stored.rows[0].response,
-      });
-    }
-
-    await client.query("commit");
-
-    return res
-      .status(200)
-      .json({ success: true, message: "money transferred successfuly" });
-  } catch (error) {
-    console.log(error);
-
-    await client.query(
-      "insert into transactions (sender_id, receiver_id, amount, type, status) values ($1, $2, $3, $4, $5)",
-      [senderId, receiverId, amount, "deposit", "failed"],
-    );
-
-    await client.query("rollback");
-
-    next(error);
-  } finally {
-    client.release();
-  }
 };
 
 // deposit money
 const deposit = async (req, res, next) => {
-  const { amount } = req.body;
-  const { userId } = req.user;
+    const { amount } = req.body;
+    const { userId } = req.user;
 
-  if (!amount) {
-    return next(new ApiError(404, "amount is required"));
-  }
+    if (!amount) {
+        return next(new ApiError(404, "amount is required"));
+    }
 
-  if (amount <= 0) {
-    return next(new ApiError(400, "amount must be greater than 0"));
-  }
+    if (amount <= 0) {
+        return next(new ApiError(400, "amount must be greater than 0"));
+    }
 
-  const client = await pool.connect();
+    const client = await pool.connect();
 
-  try {
-    await client.query("begin");
-    await client.query(
-      "update wallets set balance = balance + $1 where user_id = $2",
-      [amount, userId],
-    );
+    try {
+        await client.query("begin");
+        await client.query(
+            "update wallets set balance = balance + $1 where user_id = $2",
+            [amount, userId],
+        );
 
-    await client.query(
-      "insert into transactions (sender_id, receiver_id, amount, type, status) values ($1, $2, $3, $4, $5)",
-      [userId, userId, amount, "deposit", "completed"],
-    );
+        await client.query(
+            "insert into transactions (sender_id, receiver_id, amount, type, status) values ($1, $2, $3, $4, $5)",
+            [userId, userId, amount, "deposit", "completed"],
+        );
 
-    await client.query("commit");
+        await client.query("commit");
 
-    return res
-      .status(200)
-      .json({ success: true, message: "deposit successful" });
-  } catch (error) {
-    console.log(error);
+        const newBalance = await pool.query(
+            "select balance from wallets where user_id = $1",
+            [userId],
+        );
 
-    await pool.query(
-      "insert into transactions (sender_id, receiver_id, amount, type, status) values ($1, $2, $3, $4, $5)",
-      [6, userId, amount, "deposit", "failed"],
-    );
+        const cacheKey = `balance:${userId}`;
+        await setCache(cacheKey, newBalance.rows[0], next);
 
-    await client.query("rollback");
+        return res
+            .status(200)
+            .json({ success: true, message: "deposit successful" });
+    } catch (error) {
+        console.log(error);
 
-    next(error);
-  } finally {
-    client.release();
-  }
+        await pool.query(
+            "insert into transactions (sender_id, receiver_id, amount, type, status) values ($1, $2, $3, $4, $5)",
+            [6, userId, amount, "deposit", "failed"],
+        );
+
+        await client.query("rollback");
+
+        next(error);
+    } finally {
+        client.release();
+    }
 };
 
 // withdraw money
 const withdraw = async (req, res, next) => {
-  const { amount } = req.body;
-  const { userId } = req.user;
+    const { amount } = req.body;
+    const { userId } = req.user;
 
-  if (!amount) {
-    return next(new ApiError(404, "amount is required"));
-  }
-
-  if (amount <= 0) {
-    return next(new ApiError(400, "amount must be greater than 0"));
-  }
-
-  try {
-    const balance = await pool.query(
-      "select balance from wallets where user_id = $1",
-      [userId],
-    );
-    console.log("balance: ", balance.rows[0].balance < amount);
-
-    if (balance.rows[0].balance < amount) {
-      return next(new ApiError(400, "low available balance"));
+    if (!amount) {
+        return next(new ApiError(404, "amount is required"));
     }
-  } catch (err) {
-    console.log(err);
-    next(err);
-  }
 
-  const client = await pool.connect();
+    if (amount <= 0) {
+        return next(new ApiError(400, "amount must be greater than 0"));
+    }
 
-  try {
-    await client.query("begin");
+    try {
+        const balance = await pool.query(
+            "select balance from wallets where user_id = $1",
+            [userId],
+        );
+        console.log("balance: ", balance.rows[0].balance < amount);
 
-    await client.query(
-      "update wallets set balance = balance-$1 where user_id = $2",
-      [amount, userId],
-    );
-    await client.query(
-      "insert into transactions (sender_id, receiver_id, amount, type, status) values($1, $2, $3, $4, $5)",
-      [userId, userId, amount, "withdraw", "completed"],
-    );
+        if (balance.rows[0].balance < amount) {
+            return next(new ApiError(400, "low balance"));
+        }
+    } catch (err) {
+        console.log(err);
+        return next(err);
+    }
 
-    await client.query("commit");
+    const client = await pool.connect();
 
-    return res
-      .status(200)
-      .json({ success: true, message: "withdraw successful" });
-  } catch (error) {
-    console.log(error);
+    try {
+        await client.query("begin");
 
-    await pool.query(
-      "insert into transactions (sender_id, receiver_id, amount, type, status) values($1, $2, $3, $4, $5)",
-      [6, userId, amount, "withdraw", "failed"],
-    );
+        await client.query(
+            "update wallets set balance = balance-$1 where user_id = $2",
+            [amount, userId],
+        );
+        await client.query(
+            "insert into transactions (sender_id, receiver_id, amount, type, status) values($1, $2, $3, $4, $5)",
+            [userId, userId, amount, "withdraw", "completed"],
+        );
 
-    await client.query("rollback");
-    next(error);
-    return;
-  } finally {
-    client.release();
-  }
+        await client.query("commit");
+
+        const newBalance = await pool.query(
+            "select balance from wallets where user_id = $1",
+            [userId],
+        );
+
+        const cacheKey = `balance:${userId}`;
+        await setCache(cacheKey, newBalance.rows[0], next);
+
+        return res
+            .status(200)
+            .json({ success: true, message: "withdraw successful" });
+    } catch (error) {
+        console.log(error);
+
+        await pool.query(
+            "insert into transactions (sender_id, receiver_id, amount, type, status) values($1, $2, $3, $4, $5)",
+            [6, userId, amount, "withdraw", "failed"],
+        );
+
+        await client.query("rollback");
+        next(error);
+        return;
+    } finally {
+        client.release();
+    }
 };
 
 // history
 const transactionHistory = async (req, res, next) => {
-  const { userId } = req.user;
-  const {
-    limit = 10,
-    page = 0,
-    type = "all",
-    status = "all",
-    start_range,
-    end_range,
-  } = req.query;
+    const { userId } = req.user;
+    const {
+        limit = 10,
+        page = 0,
+        type = "all",
+        status = "all",
+        start_range,
+        end_range,
+    } = req.query;
 
-  const skip = page > 0 ? (page - 1) * limit : 0;
-  console.log(userId, limit, page, skip);
+    const skip = page > 0 ? (page - 1) * limit : 0;
+    console.log(userId, limit, page, skip);
 
-  if (!userId) {
-    return next(new ApiError(403, "user id undefined"));
-  }
-
-  try {
-    const history = await pool.query(
-      `select * from transactions where sender_id = $1 or receiver_id = $2 order by created_at desc offset $3 limit $4`,
-      [userId, userId, skip, limit],
-    );
-
-    if (!history) {
-      return next(new ApiError(500, "something went wrong!"));
+    if (!userId) {
+        return next(new ApiError(403, "user id undefined"));
     }
 
-    console.log("history: ", history);
+    try {
+        const history = await pool.query(
+            `select * from transactions where sender_id = $1 or receiver_id = $2 order by created_at desc offset $3 limit $4`,
+            [userId, userId, skip, limit],
+        );
 
-    return res.json({
-      success: true,
-      message: "transaction history",
-      limit,
-      skip,
-      totalPages: history.rowCount,
-      currentPage: page,
-      data: history.rows,
-    });
-  } catch (error) {
-    next(error);
-  }
+        if (!history) {
+            return next(new ApiError(500, "something went wrong!"));
+        }
+
+        const totalData = await pool.query(
+            `select count(*) from transactions where sender_id = $1 or receiver_id = $2`,
+            [userId, userId],
+        );
+        const total = parseInt(totalData.rows[0].count);
+
+        return res.json({
+            success: true,
+            message: "transaction history",
+            limit,
+            skip,
+            totalPages: Math.ceil(total / limit),
+            currentPage: page,
+            data: history.rows,
+        });
+    } catch (error) {
+        next(error);
+    }
 };
 
 export { checkBalance, tranferMoney, deposit, withdraw, transactionHistory };

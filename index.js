@@ -12,7 +12,7 @@ app.use(cookieParser());
 app.use(helmet());
 
 import authRoutes from "./src/routes/auth.routes.js";
-import transactionsRoutes from "./src/routes/transactions.routes.js";
+import transactionsRoutes from "./src/routes/transactions.routes.js";           
 
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/transactions", transactionsRoutes);

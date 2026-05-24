@@ -1,18 +1,16 @@
-import Redis from "ioredis";
 import ApiError from "../utils/ApiError.js";
-
-const redis = new Redis();
+import { redisClient } from "./redisClient.js";
 
 export function createRateLimiter({ limit, windowMs, keyFn }) {
   return async (req, res, next) => {
     try {
-      const key = `ratelimit:${keyFn(req)}`;
+      const key = `rl:${keyFn(req)}`;
 
       const now = Date.now();
       const windowStart = now - windowMs;
 
-      await redis.zremrangebyscore(key, 0, windowStart);
-      const currentCount = await redis.zcard(key);
+      await redisClient.zremrangebyscore(key, 0, windowStart);
+      const currentCount = await redisClient.zcard(key);
 
       if (currentCount >= limit) {
         return next(
@@ -20,8 +18,8 @@ export function createRateLimiter({ limit, windowMs, keyFn }) {
         );
       }
 
-      await redis.zadd(key, now, `${now}-${Math.random()}`);
-      await redis.expire(key, Math.ceil(windowMs / 1000));
+      await redisClient.zadd(key, now, `${now}-${Math.random()}`);
+      await redisClient.expire(key, Math.ceil(windowMs / 1000));
 
       next();
     } catch (error) {
@@ -48,12 +46,12 @@ export const refreshLimiter = createRateLimiter({
 export const transferLimiter = createRateLimiter({
   limit: 3,
   windowMs: 60 * 1000,
-  keyFn: (req) => `transfer:${req.user.id}`,
+  keyFn: (req) => `transfer:${req.user.userId}`,
 });
 
 // deposit + withdraw limiter
 export const moneyLimiter = createRateLimiter({
   limit: 10,
   windowMs: 60 * 1000,
-  keyFn: (req) => `money:${req.user.id}`,
+  keyFn: (req) => `money:${req.user.userId}`,
 });
