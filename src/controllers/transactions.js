@@ -1,7 +1,8 @@
 import { pool } from "../config/db.js";
-import { getCache, setCache } from "../middleware/cache.js";
+import { getCache, setCache } from "../utils/cache.js";
 import ApiError from "../utils/ApiError.js";
 import { aquireLock, releaseLock } from "../utils/lock.js";
+import { addjob, queue } from "../Queues/notification.queue.js";
 
 const checkBalance = async (req, res, next) => {
     const userId = req.user.userId;
@@ -47,11 +48,11 @@ const checkBalance = async (req, res, next) => {
 // transfer money
 const tranferMoney = async (req, res, next) => {
     const idempotencyKey = req.headers["idempotency-key"];
-    const lockKey = `lock:wallet:${senderId}`;
 
     const { amount } = req.body;
     const { receiverId } = req.params;
     const senderId = req.user.userId;
+    const lockKey = `lock:wallet:${senderId}`;
 
     if (!idempotencyKey) {
         return res.status(400).json({
@@ -60,6 +61,7 @@ const tranferMoney = async (req, res, next) => {
     }
 
     const client = await pool.connect();
+    let lockAcquired = false;
 
     try {
         const isReceiver = await pool.query(
@@ -92,6 +94,7 @@ const tranferMoney = async (req, res, next) => {
                 ),
             );
         }
+        lockAcquired = true;
 
         await client.query("begin");
 
@@ -159,6 +162,15 @@ const tranferMoney = async (req, res, next) => {
         await setCache(senderKey, senderBalance.rows[0], next);
         await setCache(receiverKey, receiverBalance.rows[0], next);
 
+        await addjob("TRANSFER_DEBIT_MAIL", {
+            user: senderId,
+            amount,
+        });
+        await addjob("TRANSFER_CREDIT_MAIL", {
+            user: receiverId,
+            amount,
+        });
+
         return res
             .status(200)
             .json({ success: true, message: "money transferred successfuly" });
@@ -167,14 +179,14 @@ const tranferMoney = async (req, res, next) => {
 
         await client.query(
             "insert into transactions (sender_id, receiver_id, amount, type, status) values ($1, $2, $3, $4, $5)",
-            [senderId, receiverId, amount, "deposit", "failed"],
+            [senderId, receiverId, amount, "transfer", "failed"],
         );
 
         await client.query("rollback");
 
         next(error);
     } finally {
-        await releaseLock(lockKey);
+        if (lockAcquired) await releaseLock(lockKey);
         client.release();
     }
 };

@@ -1,5 +1,5 @@
+import { redisClient } from "../config/redisClient.js";
 import ApiError from "../utils/ApiError.js";
-import { redisClient } from "./redisClient.js";
 
 export function createRateLimiter({ limit, windowMs, keyFn }) {
   return async (req, res, next) => {
