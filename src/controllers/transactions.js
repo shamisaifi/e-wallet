@@ -228,6 +228,11 @@ const deposit = async (req, res, next) => {
         const cacheKey = `balance:${userId}`;
         await setCache(cacheKey, newBalance.rows[0], next);
 
+        await addjob("DEPOSIT_MAIL", {
+            user: userId,
+            amount,
+        });
+
         return res
             .status(200)
             .json({ success: true, message: "deposit successful" });
@@ -298,6 +303,11 @@ const withdraw = async (req, res, next) => {
 
         const cacheKey = `balance:${userId}`;
         await setCache(cacheKey, newBalance.rows[0], next);
+
+        await addjob("WITHDRAW_MAIL", {
+            user: userId,
+            amount,
+        });
 
         return res
             .status(200)
