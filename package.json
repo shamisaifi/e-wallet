@@ -1,28 +1,30 @@
 {
   "name": "e-wallet",
-  "version": "1.0.0",
-  "description": "E-Wallet to manage transactions",
+  "version": "2.0.0",
+  "description": "Production-grade E-Wallet Backend API",
   "license": "ISC",
   "author": "MD Shami",
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "start": "nodemon index.js",
-    "test": "node index.js"
+    "start": "node index.js",
+    "worker": "node worker.js",
+    "dev": "nodemon index.js",
+    "dev:worker": "nodemon worker.js"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",
-    "bullmq": "^5.77.2",
+    "bullmq": "^5.0.0",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
-    "helmet": "^8.1.0",
-    "ioredis": "^5.10.1",
+    "helmet": "^8.0.0",
+    "ioredis": "^5.0.0",
     "jsonwebtoken": "^9.0.3",
-    "nodemailer": "^8.0.8",
+    "nodemailer": "^7.0.0",
     "nodemon": "^3.1.14",
     "pg": "^8.20.0",
-    "redis": "^5.12.1"
+    "zod": "^3.25.0"
   }
 }

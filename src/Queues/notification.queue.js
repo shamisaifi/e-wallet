@@ -1,14 +1,23 @@
 import { Queue } from "bullmq";
-import IORedis from "ioredis";
+import { bullMQConnection } from "../config/redisClient.js";
 
-const connection = new IORedis({
-    host: process.env.REDIS_HOST || "127.0.0.1",
-    port: process.env.REDIS_PORT || 6379,
-    maxRetriesPerRequest: null,
+export const notificationQueue = new Queue("notifications", {
+    connection: bullMQConnection,
+    defaultJobOptions: {
+        attempts: 3,
+        backoff: {
+            type: "exponential",
+            delay: 2000,
+        },
+        removeOnComplete: 100,
+        removeOnFail: 50,
+    },
 });
 
-export const queue = new Queue("mail_queue", { connection });
-
-export const addjob = async (jobtype, payload) => {
-    await queue.add(jobtype, payload);
+export const addNotificationJob = async (jobType, payload) => {
+    try {
+        await notificationQueue.add(jobType, payload);
+    } catch (err) {
+        console.error("Failed to add notification job:", err.message);
+    }
 };

@@ -8,5 +8,9 @@ export const aquireLock = async (key, ttlSeconds) => {
 };
 
 export const releaseLock = async (key) => {
-    await redisClient.del(key);
+    try {
+        await redisClient.del(key);
+    } catch (error) {
+        console.error("Lock release error:", err.message);
+    }
 };
