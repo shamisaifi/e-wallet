@@ -8,7 +8,7 @@ import {
     generateRefreshToken,
 } from "../utils/generateToken.js";
 import { generateAndStoreOtp, verifyOtp } from "../services/otp.service.js";
-import { addNotificationJob } from "../Queues/notification.queue.js";
+import { addNotificationJob } from "../queues/notification.queue.js";
 
 // ─── Register ────────────────────────────────────────────────────────────────
 // Creates unverified user. Does NOT create wallet yet.
@@ -252,4 +252,21 @@ export const logout = (req, res) => {
     return res
         .status(200)
         .json(new ApiResponse(200, "Logged out successfully"));
+};
+
+
+export const changePin = async (req, res, next) => {
+    const { currentPin, newPin } = req.body;
+    const { userId } = req.user;
+    try {
+        const result = await pool.query("SELECT pin FROM users WHERE user_id = $1", [userId]);
+        if (result.rows.length === 0) return next(new ApiError(404, "User not found"));
+        const valid = await bcrypt.compare(currentPin, result.rows[0].pin);
+        if (!valid) return next(new ApiError(401, "Current PIN is incorrect"));
+        const hashed = await bcrypt.hash(newPin, 10);
+        await pool.query("UPDATE users SET pin = $1 WHERE user_id = $2", [hashed, userId]);
+        return res.status(200).json(new ApiResponse(200, "PIN updated successfully"));
+    } catch (err) {
+        next(err);
+    }
 };

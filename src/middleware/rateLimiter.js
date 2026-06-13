@@ -39,7 +39,7 @@ export const loginLimiter = createRateLimiter({
 });
 
 export const registerLimiter = createRateLimiter({
-    limit: 20,
+    limit: 5,
     windowMs: 60 * 60 * 1000, // 3 registrations per hour per IP
     keyFn: (req) => `register:${req.ip}`,
 });

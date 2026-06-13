@@ -4,7 +4,7 @@ import ApiError from "../utils/ApiError.js";
 import ApiResponse from "../utils/ApiResponse.js";
 import { getCache, setCache, deleteCache } from "../utils/cache.js";
 import { aquireLock, releaseLock } from "../utils/lock.js";
-import { addNotificationJob } from "../Queues/notification.queue.js";
+import { addNotificationJob } from "../queues/notification.queue.js";
 
 // ─── Verify Transaction PIN ───────────────────────────────────────────────────
 
@@ -65,7 +65,7 @@ export const deposit = async (req, res, next) => {
     try {
         const pinValid = await verifyPin(userId, pin);
         if (!pinValid) {
-            return next(new ApiError(401, "Incorrect transaction PIN"));
+            return next(new ApiError(403, "Incorrect transaction PIN"));
         }
     } catch (err) {
         return next(err);
@@ -136,7 +136,7 @@ export const withdraw = async (req, res, next) => {
     try {
         const pinValid = await verifyPin(userId, pin);
         if (!pinValid) {
-            return next(new ApiError(401, "Incorrect transaction PIN"));
+            return next(new ApiError(403, "Incorrect transaction PIN"));
         }
     } catch (err) {
         return next(err);
@@ -258,7 +258,7 @@ export const transfer = async (req, res, next) => {
     try {
         const pinValid = await verifyPin(senderId, pin);
         if (!pinValid) {
-            return next(new ApiError(401, "Incorrect transaction PIN"));
+            return next(new ApiError(403, "Incorrect transaction PIN"));
         }
     } catch (err) {
         return next(err);

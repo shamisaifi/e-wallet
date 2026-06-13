@@ -11,6 +11,6 @@ export const releaseLock = async (key) => {
     try {
         await redisClient.del(key);
     } catch (error) {
-        console.error("Lock release error:", err.message);
+        console.error("Lock release error:", error.message);
     }
 };
